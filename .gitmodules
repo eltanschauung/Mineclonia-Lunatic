@@ -1,0 +1,63 @@
+[submodule "mods/colors_api"]
+	path = mods/colors_api
+	url = /usr/share/luanti/mods/colors_api
+[submodule "mods/mcl_lun_ambience"]
+	path = mods/mcl_lun_ambience
+	url = /usr/share/luanti/mods/mcl_lun_ambience
+[submodule "mods/mcl_lun_bamboo"]
+	path = mods/mcl_lun_bamboo
+	url = /usr/share/luanti/mods/mcl_lun_bamboo
+[submodule "mods/mcl_lun_barriers"]
+	path = mods/mcl_lun_barriers
+	url = /usr/share/luanti/mods/mcl_lun_barriers
+[submodule "mods/mcl_lun_biome_override"]
+	path = mods/mcl_lun_biome_override
+	url = /usr/share/luanti/mods/mcl_lun_biome_override
+[submodule "mods/mcl_lun_biomes"]
+	path = mods/mcl_lun_biomes
+	url = /usr/share/luanti/mods/mcl_lun_biomes
+[submodule "mods/mcl_lun_bows"]
+	path = mods/mcl_lun_bows
+	url = /usr/share/luanti/mods/mcl_lun_bows
+[submodule "mods/mcl_lun_cooking"]
+	path = mods/mcl_lun_cooking
+	url = /usr/share/luanti/mods/mcl_lun_cooking
+[submodule "mods/mcl_lun_effects"]
+	path = mods/mcl_lun_effects
+	url = /usr/share/luanti/mods/mcl_lun_effects
+[submodule "mods/mcl_lun_factions"]
+	path = mods/mcl_lun_factions
+	url = /usr/share/luanti/mods/mcl_lun_factions
+[submodule "mods/mcl_lun_flight"]
+	path = mods/mcl_lun_flight
+	url = /usr/share/luanti/mods/mcl_lun_flight
+[submodule "mods/mcl_lun_homing"]
+	path = mods/mcl_lun_homing
+	url = /usr/share/luanti/mods/mcl_lun_homing
+[submodule "mods/mcl_lun_items"]
+	path = mods/mcl_lun_items
+	url = /usr/share/luanti/mods/mcl_lun_items
+[submodule "mods/mcl_lun_mobs"]
+	path = mods/mcl_lun_mobs
+	url = /usr/share/luanti/mods/mcl_lun_mobs
+[submodule "mods/mcl_lun_music"]
+	path = mods/mcl_lun_music
+	url = /usr/share/luanti/mods/mcl_lun_music
+[submodule "mods/mcl_lun_nodes"]
+	path = mods/mcl_lun_nodes
+	url = /usr/share/luanti/mods/mcl_lun_nodes
+[submodule "mods/mcl_lun_npcs"]
+	path = mods/mcl_lun_npcs
+	url = /usr/share/luanti/mods/mcl_lun_npcs
+[submodule "mods/mcl_lun_ocean"]
+	path = mods/mcl_lun_ocean
+	url = /usr/share/luanti/mods/mcl_lun_ocean
+[submodule "mods/mcl_lun_prefixes"]
+	path = mods/mcl_lun_prefixes
+	url = /usr/share/luanti/mods/mcl_lun_prefixes
+[submodule "mods/mcl_lun_races"]
+	path = mods/mcl_lun_races
+	url = /usr/share/luanti/mods/mcl_lun_races
+[submodule "mods/mcl_lun_sounds"]
+	path = mods/mcl_lun_sounds
+	url = /usr/share/luanti/mods/mcl_lun_sounds
