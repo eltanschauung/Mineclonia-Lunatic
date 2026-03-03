@@ -3,23 +3,23 @@ local races_api = rawget(_G, "mcl_lun_races")
 local mobs_mc = rawget(_G, "mobs_mc")
 
 if not races_api then
-	minetest.log("warning", "[mcl_lun_npcs] mcl_lun_races missing; NPC metadata unavailable")
+	minetest.log("action", "[mcl_lun_npcs] mcl_lun_races missing; NPC metadata unavailable")
 	return
 end
 
 local race_index = races_api.race_index or {}
 if not next(race_index) then
-	minetest.log("warning", "[mcl_lun_npcs] race index empty; nothing to register")
+	minetest.log("action", "[mcl_lun_npcs] race index empty; nothing to register")
 	return
 end
 
 if not mcl_mobs then
-	minetest.log("warning", "[mcl_lun_npcs] mcl_mobs missing; cannot register NPCs")
+	minetest.log("action", "[mcl_lun_npcs] mcl_mobs missing; cannot register NPCs")
 	return
 end
 
 if not mobs_mc or not mobs_mc.villager_base then
-	minetest.log("warning", "[mcl_lun_npcs] mobs_mc villager base unavailable")
+	minetest.log("action", "[mcl_lun_npcs] mobs_mc villager base unavailable")
 	return
 end
 

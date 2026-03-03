@@ -4,8 +4,17 @@ local state = {}
 local DOUBLE_JUMP_BOOST = 8.05
 local SLOWFALL_GRAVITY = 0.25
 
+local races = rawget(_G, "mcl_lun_races")
+local mcl_lun_sounds = rawget(_G, "mcl_lun_sounds")
+
+local function lun_sound(name, params, ephemeral)
+	if mcl_lun_sounds and mcl_lun_sounds.play then
+		return mcl_lun_sounds.play(name, params, ephemeral)
+	end
+	return core.sound_play(name, params or {}, ephemeral == nil and true or ephemeral)
+end
+
 local function can_float(player)
-	local races = rawget(_G, "mcl_lun_races")
 	if not races or not races.get_race then
 		return false
 	end
@@ -71,28 +80,28 @@ core.register_globalstep(function(dtime)
 			st.last_vel_y = vel and vel.y or 0
 			st.prev_jump = ctrl.jump
 			goto continue
-		end
-
-		if ctrl.jump and not st.prev_jump then
-			if not st.double_jump_used then
-				set_slowfall(player, false)
-				player:add_velocity({ x = 0, y = DOUBLE_JUMP_BOOST, z = 0 })
-				core.sound_play("mcl_lun_races_se_kira02", {
-					pos = player:get_pos(),
-					gain = 0.6,
-					max_hear_distance = 24,
-				}, true)
-				st.double_jump_used = true
-				st.ascending = true
-			elseif st.slowfall then
-				set_slowfall(player, false)
-				core.sound_play("mcl_lun_races_se_ophide", {
-					pos = player:get_pos(),
-					gain = 0.55,
-					max_hear_distance = 24,
-				}, true)
 			end
-		end
+
+			if ctrl.jump and not st.prev_jump then
+				if not st.double_jump_used then
+					set_slowfall(player, false)
+					player:add_velocity({ x = 0, y = DOUBLE_JUMP_BOOST, z = 0 })
+					lun_sound("se_kira02", {
+						pos = player:get_pos(),
+						gain = 0.6,
+						max_hear_distance = 24,
+					})
+					st.double_jump_used = true
+					st.ascending = true
+				elseif st.slowfall then
+					set_slowfall(player, false)
+					lun_sound("se_ophide", {
+						pos = player:get_pos(),
+						gain = 0.55,
+						max_hear_distance = 24,
+					})
+				end
+			end
 
 		if st.ascending and (not vel or vel.y <= st.last_vel_y) then
 			st.ascending = false

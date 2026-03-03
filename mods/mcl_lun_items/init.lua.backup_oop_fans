@@ -1,0 +1,2247 @@
+local S = minetest.get_translator("mcl_lun_items")
+local mcl_enchanting = rawget(_G, "mcl_enchanting")
+local mcl_util = rawget(_G, "mcl_util")
+local mcl_burning = rawget(_G, "mcl_burning")
+local wielded_light = rawget(_G, "wielded_light")
+local mcl_lun_homing = rawget(_G, "mcl_lun_homing")
+local prefix_api = rawget(_G, "mcl_lun_prefixes")
+local mcl_bows = rawget(_G, "mcl_bows")
+local mcl_lun_sounds = rawget(_G, "mcl_lun_sounds")
+
+local function lun_sound(name, params, ephemeral)
+	if mcl_lun_sounds and mcl_lun_sounds.play then
+		return mcl_lun_sounds.play(name, params, ephemeral)
+	end
+	return core.sound_play(name, params or {}, ephemeral == nil and true or ephemeral)
+end
+
+if mcl_bows and mcl_bows.set_texture_overrides then
+	mcl_bows.set_texture_overrides({
+		bow = "mcl_lun_items_bow.png",
+		bow_0 = "mcl_lun_items_bow_0.png",
+		bow_1 = "mcl_lun_items_bow_1.png",
+		bow_2 = "mcl_lun_items_bow_2.png",
+		arrow = "mcl_lun_items_arrow.png",
+		arrow_entity = "mcl_lun_items_arrow.png",
+	})
+end
+
+local LIGHT_DIM_FACTOR = 0.7
+
+local ROD_SPEED = 25
+local ROD_MAX_LIFE = 6
+local ROD_MAX_BOUNCES = 3
+local ROD_FIRE_COOLDOWN = 0.4
+local ROD_META_KEY = "mcl_lun_items:rarity_init"
+local ORB_ROTATION_SPEED = math.rad(35)
+local FAN_PROJECTILE_INITIAL_SPEED = 28
+local FAN_PROJECTILE_BASE_LIFE = 0.9
+local FAN_PROJECTILE_VAR_LIFE = 0.4
+local FAN_PROJECTILE_DECAY = 1.4
+local FAN_PROJECTILE_GRAVITY = 22
+local FAN_PROJECTILE_MIN_SPEED = 0.5
+local FAN_PROJECTILE_DAMAGE = 5
+local FAN_PROJECTILE_OFFSET = 1
+local FAN_DEFAULT_COOLDOWN = 0.35
+local FAN_PARTICLE_COLOR = "#ff8c00"
+local FAN_PARTICLE_GLOW = 3
+local FAN_PROJECTILE_LIGHT = 3
+local MAPLE_PATTERN = {
+	{x = 0, y = 0.5, z = 0},
+	{x = 1, y = 0.6, z = 0},
+	{x = -1, y = 0.6, z = 0},
+	{x = 0, y = 0.7, z = 1},
+	{x = 0, y = 0.7, z = -1},
+	{x = 1, y = 0.4, z = 1},
+	{x = -1, y = 0.4, z = -1},
+	{x = 0, y = 0.8, z = 2},
+	{x = 0, y = 0.8, z = -2},
+}
+local DEFAULT_ROD_EXPLOSION_RADIUS = 2
+local DEFAULT_ORB_EXPLOSION_RADIUS = 1
+local HOMING_ACCEL_DURATION = 1.0
+local HOMING_INITIAL_SPEED_FACTOR = 0.2
+local HOMING_CLOSE_DISTANCE = 1.0
+local HOMING_CLOSE_RADIUS = 3
+local TNT_EXPLODE_SOUND = "mcl_tnt_tnt_explode"
+local ZOMBIE_COLLISION_VOLUME = 0.6 * 1.95 * 0.6
+
+local rod_variants = {
+	{
+		name = "mcl_lun_items:purification_rod",
+		description = S("Dusty Purification Rod"),
+		base_description = S("Purification Rod"),
+		prefix = "dusty",
+		light_level = 4,
+		damage = 2,
+		explosion_radius = 2,
+	},
+	{
+		name = "mcl_lun_items:purification_rod_normal",
+		description = S("Normal Purification Rod"),
+		base_description = S("Purification Rod"),
+		prefix = "normal",
+		light_level = 5,
+		damage = 3,
+		explosion_radius = 2,
+	},
+	{
+		name = "mcl_lun_items:purification_rod_legendary",
+		description = S("Legendary Purification Rod"),
+		base_description = S("Purification Rod"),
+		prefix = "legendary",
+		light_level = 6,
+		damage = 4,
+		color = "#eb9f9f",
+	},
+}
+
+local rod_index = {}
+for _, def in ipairs(rod_variants) do
+	rod_index[def.name] = def
+end
+
+local rod_descriptions = {}
+
+local orb_variants = {
+	{
+		name = "mcl_lun_items:yin_yang_orb_precision",
+		description = S("Yin Yang Orb - Precision"),
+		texture = "yin_yang_orb_inventory.png",
+		groups = {misc = 1},
+		light_level = 6,
+		explosion_radius = 1,
+		damage = 1,
+	},
+	{
+		name = "mcl_lun_items:yin_yang_orb_homing",
+		description = S("Yin Yang Orb - Homing"),
+		texture = "yin_yang_orb_inventory_purple.png",
+		groups = {misc = 1},
+		light_level = 6,
+		explosion_radius = 1,
+		damage = 0.5,
+	},
+	{
+		name = "mcl_lun_items:yin_yang_orb_bouncing",
+		description = S("Yin Yang Orb - Bouncing"),
+		texture = "yin_yang_orb_inventory_green.png",
+		groups = {misc = 1},
+		light_level = 6,
+		explosion_radius = 1,
+		damage = 2,
+	},
+}
+local ORB_PARTICLE_TINTS = {
+	homing = "#b47bff",
+	bouncing = "#7cffa3",
+}
+
+local ammo_definitions = {
+	["mcl_lun_items:yin_yang_orb_precision"] = {
+		type = "precision",
+		rotation_multiplier = 1,
+		gravity = 0,
+		bounce_damping = 1,
+		model_texture = "yin_yang_orb.png",
+		damage = 2,
+	},
+	["mcl_lun_items:yin_yang_orb_homing"] = {
+		type = "homing",
+		rotation_multiplier = 1,
+		model_texture = "yin_yang_orb_purple.png",
+		damage = 2,
+		homing_range = 35,
+		homing_fov = 0.85,
+		homing_turn_rate = 5.5,
+		particle_color = ORB_PARTICLE_TINTS.homing,
+	},
+	["mcl_lun_items:yin_yang_orb_bouncing"] = {
+		type = "bouncing",
+		rotation_multiplier = 2,
+		gravity = -12,
+		bounce_damping = 0.7,
+		extra_vertical = 2,
+		model_texture = "yin_yang_orb_green.png",
+		damage = 2,
+		particle_color = ORB_PARTICLE_TINTS.bouncing,
+	},
+}
+local ammo_priority = {
+	"mcl_lun_items:yin_yang_orb_precision",
+	"mcl_lun_items:yin_yang_orb_homing",
+	"mcl_lun_items:yin_yang_orb_bouncing",
+}
+
+local ammo_labels = {
+	["mcl_lun_items:yin_yang_orb_precision"] = S("Precision"),
+	["mcl_lun_items:yin_yang_orb_homing"] = S("Homing"),
+	["mcl_lun_items:yin_yang_orb_bouncing"] = S("Bouncing"),
+}
+
+local player_selected_ammo = {}
+local ITEM_STATS = {}
+_G.mcl_lun_items_item_stats = ITEM_STATS
+_G.item_stats = ITEM_STATS
+
+local DEFAULT_LIGHT = 3
+local LIGHT_DIM_FACTOR = 0.7
+
+local function register_item_light(name, level)
+	if not name or not wielded_light or not wielded_light.register_item_light then
+		return
+	end
+	local val = level or DEFAULT_LIGHT
+	wielded_light.register_item_light(name, val, false)
+end
+
+local function consume_orb_ammo(user)
+	if not user or not user:is_player() then
+		return nil
+	end
+	local inv = user:get_inventory()
+	if not inv then
+		return nil
+	end
+	local name = user:get_player_name()
+	local preferred = player_selected_ammo[name]
+	local creative = false
+	if core.is_creative_enabled and name and name ~= "" then
+		creative = core.is_creative_enabled(name)
+	end
+	local function take(name_to_take)
+		local size = inv:get_size("main")
+		for idx = 1, size do
+			local stack = inv:get_stack("main", idx)
+			if stack and stack:get_name() == name_to_take then
+				player_selected_ammo[name] = name_to_take
+				if not creative then
+					stack:take_item(1)
+					inv:set_stack("main", idx, stack)
+				end
+				return true
+			end
+		end
+		return false
+	end
+	if preferred and ammo_definitions[preferred] and take(preferred) then
+		return ammo_definitions[preferred], preferred
+	end
+	for _, name in ipairs(ammo_priority) do
+		if take(name) then
+			return ammo_definitions[name], name
+		end
+	end
+	return nil
+end
+
+local function is_yin_yang_orb(name)
+	return name and name:find("mcl_lun_items:yin_yang_orb_", 1, true) == 1
+end
+
+local orb_drop_cfg = {
+	color = "#9e9e9e",
+	texture = "mcl_particles_bonemeal.png",
+	radius = 0.25,
+	glow = math.max(1, math.floor(6 * LIGHT_DIM_FACTOR)),
+	height = 1.2,
+}
+
+local DEFAULT_MOD_LIGHT = 3
+local ROD_DURABILITY = 300
+local light_schema = {}
+-- Additional light emitters tracked separately (populated via register_lun_item)
+local extra_light_items = {}
+
+-- Unified registry for lun items (particles, light, sounds, etc.)
+local lun_item_registry = {}
+local particle_settings = {}
+
+local fan_tier_particle_names = {
+    normal = "mcl_lun_races:hauchiwa_fan_normal",
+    greater = "mcl_lun_races:hauchiwa_fan_greater",
+}
+
+-- Fan stats registry (damage, cooldown, projectile params)
+local fan_stats = {}
+
+local function register_fan_stats(name, stats)
+	if not name or not stats then return end
+	fan_stats[name] = stats
+end
+
+local function get_fan_stats(name)
+	local stats = fan_stats[name]
+	if stats then return stats end
+	return {
+		damage = FAN_PROJECTILE_DAMAGE,
+		cooldown = FAN_DEFAULT_COOLDOWN,
+		initial_speed = FAN_PROJECTILE_INITIAL_SPEED,
+		base_life = FAN_PROJECTILE_BASE_LIFE,
+		var_life = FAN_PROJECTILE_VAR_LIFE,
+		decay = FAN_PROJECTILE_DECAY,
+		gravity = FAN_PROJECTILE_GRAVITY,
+		min_speed = FAN_PROJECTILE_MIN_SPEED,
+		light = FAN_PROJECTILE_LIGHT,
+		glow = FAN_PARTICLE_GLOW,
+	}
+end
+
+local function register_lun_item(def)
+	-- def: {
+	--   name = "itemstring" or {list},
+	--   particle_color, particle_texture, particle_radius, particle_glow, particle_height,
+	--   light_level, extra_light,
+	--   sounds = { ... } (reserved for future use)
+	-- }
+	if not def or not def.name then return end
+	local names = type(def.name) == "table" and def.name or {def.name}
+	for _, n in ipairs(names) do
+		lun_item_registry[n] = {
+			particle_color = def.particle_color,
+			particle_texture = def.particle_texture,
+			particle_radius = def.particle_radius,
+			particle_glow = def.particle_glow,
+			particle_height = def.particle_height,
+			light_level = def.light_level,
+			extra_light = def.extra_light,
+			sounds = def.sounds,
+		}
+		if def.particle_color then
+			particle_settings[n] = {color = def.particle_color}
+		end
+		if def.light_level then
+			light_schema[n] = def.light_level
+			register_item_light(n, def.light_level)
+		end
+		if def.extra_light then
+			extra_light_items[n] = def.extra_light
+			register_item_light(n, def.extra_light)
+		end
+	end
+end
+
+
+local function make_orb_particle_cfg(color)
+	if not color then
+		return nil
+	end
+	return {
+		color = color,
+		texture = orb_drop_cfg.texture,
+		radius = orb_drop_cfg.radius,
+		glow = orb_drop_cfg.glow,
+		height = orb_drop_cfg.height,
+	}
+end
+
+local function build_particle_cfg(entry)
+	if not entry or not entry.color then
+		return nil
+	end
+	return make_orb_particle_cfg(entry.color)
+end
+
+local function particle_cfg_for_stack(stack)
+    if not stack then
+        return nil
+    end
+    if stack:is_empty() then
+        return nil
+    end
+	local reg = lun_item_registry[stack:get_name()]
+	if reg and reg.particle_color then
+		return {
+			color = reg.particle_color,
+			texture = reg.particle_texture or orb_drop_cfg.texture,
+			radius = reg.particle_radius or orb_drop_cfg.radius,
+			glow = reg.particle_glow or orb_drop_cfg.glow,
+			height = reg.particle_height or orb_drop_cfg.height,
+		}
+	end
+    local cfg = particle_settings[stack:get_name()]
+    if cfg then
+        return build_particle_cfg(cfg)
+    end
+	local tier = stack:get_meta():get_string("mcl_lun_races:fan_tier")
+	local fallback_name = tier and fan_tier_particle_names[tier]
+	if fallback_name then
+        local fallback_cfg = particle_settings[fallback_name]
+        local built = build_particle_cfg(fallback_cfg)
+        if built then
+            return built
+        end
+	end
+	local ammo_cfg = ammo_definitions[stack:get_name()]
+	if ammo_cfg and ammo_cfg.particle_color then
+        return make_orb_particle_cfg(ammo_cfg.particle_color)
+    end
+    return nil
+end
+
+for _, orb in ipairs(orb_variants) do
+	light_schema[orb.name] = 4
+end
+
+-- Register existing items into the unified registry
+register_lun_item({
+	name = {
+		"mcl_lun_items:purification_rod",
+		"mcl_lun_items:purification_rod_normal",
+		"mcl_lun_items:purification_rod_legendary",
+	},
+	particle_color = nil, -- rods use the fallback particle colors per rarity elsewhere
+	light_level = 4,
+})
+register_lun_item({
+	name = "mcl_lun_items:purification_rod_normal",
+	particle_color = "#a0d1ff",
+	light_level = 5,
+})
+register_lun_item({
+	name = "mcl_lun_items:purification_rod_legendary",
+	particle_color = "#eb9f9f",
+	light_level = 6,
+})
+register_lun_item({
+	name = {
+		"mcl_lun_races:hauchiwa_fan",
+		"mcl_lun_races:hauchiwa_fan_normal",
+	},
+	particle_color = "#a347ff",
+	light_level = 5,
+	extra_light = 5,
+})
+register_lun_item({
+	name = "mcl_lun_races:hauchiwa_fan_greater",
+	particle_color = "#ffb347",
+	light_level = 6,
+	extra_light = 6,
+})
+-- Fan stats (damage/cooldown/physics)
+register_fan_stats("mcl_lun_races:hauchiwa_fan", {
+	damage = 5,
+	cooldown = FAN_DEFAULT_COOLDOWN,
+	initial_speed = FAN_PROJECTILE_INITIAL_SPEED,
+	base_life = FAN_PROJECTILE_BASE_LIFE,
+	var_life = FAN_PROJECTILE_VAR_LIFE,
+	decay = FAN_PROJECTILE_DECAY,
+	gravity = FAN_PROJECTILE_GRAVITY,
+	min_speed = FAN_PROJECTILE_MIN_SPEED,
+	light = 6,
+	glow = FAN_PARTICLE_GLOW,
+})
+register_fan_stats("mcl_lun_races:hauchiwa_fan_normal", {
+	damage = 5,
+	cooldown = FAN_DEFAULT_COOLDOWN,
+	initial_speed = FAN_PROJECTILE_INITIAL_SPEED,
+	base_life = FAN_PROJECTILE_BASE_LIFE,
+	var_life = FAN_PROJECTILE_VAR_LIFE,
+	decay = FAN_PROJECTILE_DECAY,
+	gravity = FAN_PROJECTILE_GRAVITY,
+	min_speed = FAN_PROJECTILE_MIN_SPEED,
+	light = 8,
+	glow = FAN_PARTICLE_GLOW,
+})
+register_fan_stats("mcl_lun_races:hauchiwa_fan_greater", {
+	damage = 6,
+	cooldown = FAN_DEFAULT_COOLDOWN,
+	initial_speed = FAN_PROJECTILE_INITIAL_SPEED,
+	base_life = FAN_PROJECTILE_BASE_LIFE,
+	var_life = FAN_PROJECTILE_VAR_LIFE,
+	decay = FAN_PROJECTILE_DECAY,
+	gravity = FAN_PROJECTILE_GRAVITY,
+	min_speed = FAN_PROJECTILE_MIN_SPEED,
+	light = 10,
+	glow = FAN_PARTICLE_GLOW,
+})
+-- Yin-yang orbs (ammo variants)
+for _, orb in ipairs(orb_variants) do
+	register_lun_item({
+		name = orb.name,
+		particle_color = orb.particle_color or orb.color or "#9e9e9e",
+		light_level = orb.light_level or DEFAULT_LIGHT,
+	})
+end
+register_lun_item({
+	name = {
+		"mcl_lun_bows:lunar_bow_weakened",
+		"mcl_lun_bows:lunar_bow_normal",
+		"mcl_lun_bows:lunar_bow_legendary",
+	},
+	particle_color = "#6ab7ff",
+	particle_glow = 10,
+})
+register_lun_item({
+	name = "mcl_lun_bows:lunar_arrow",
+	particle_color = "#6ab7ff",
+	particle_glow = 10,
+	light_level = 4,
+})
+
+local function get_mod_light(name)
+	return light_schema[name] or DEFAULT_MOD_LIGHT
+end
+
+local function register_schema_lighting()
+	if not wielded_light or not wielded_light.register_item_light then
+		return
+	end
+	local seen = {}
+	local function reg(name, level)
+		if not name or not level then return end
+		local dim = math.max(1, math.floor((level or DEFAULT_LIGHT) * LIGHT_DIM_FACTOR))
+		register_item_light(name, dim)
+		seen[name] = true
+	end
+	-- Prefer registry entries
+	for name, def in pairs(lun_item_registry) do
+		if def.light_level then
+			reg(name, def.light_level)
+		end
+		if def.extra_light then
+			reg(name, def.extra_light)
+		end
+	end
+end
+
+local function cycle_ammo_type(itemstack, user, pointed_thing)
+	if not user or not user:is_player() then
+		return itemstack
+	end
+	local inv = user:get_inventory()
+	if not inv then
+		return itemstack
+	end
+	local name = user:get_player_name()
+	local available = {}
+	for _, ammo in ipairs(ammo_priority) do
+		if inv:contains_item("main", ItemStack(ammo)) then
+			available[#available + 1] = ammo
+		end
+	end
+	if #available == 0 then
+		minetest.chat_send_player(name, S("No Yin-Yang Orbs available."))
+		return itemstack
+	end
+	local current = player_selected_ammo[name]
+	local next_idx = 1
+	for idx, ammo in ipairs(available) do
+		if ammo == current then
+			next_idx = idx % #available + 1
+			break
+		end
+	end
+	local selected = available[next_idx]
+	player_selected_ammo[name] = selected
+	minetest.chat_send_player(name, S("Selected ammo: @1", ammo_labels[selected] or selected))
+	return itemstack
+end
+
+local function cycle_ammo_on_place(itemstack, placer, pointed_thing)
+	if mcl_util and mcl_util.call_on_rightclick and pointed_thing and pointed_thing.type == "node" then
+		local rc = mcl_util.call_on_rightclick(itemstack, placer, pointed_thing)
+		if rc then
+			return rc
+		end
+	end
+	return cycle_ammo_type(itemstack, placer, pointed_thing)
+end
+
+local rod_cooldowns = {}
+
+local function rod_ready(user)
+	local name = user and user:get_player_name()
+	if not name or name == "" then
+		return true
+	end
+	local now = core.get_gametime()
+	local next_allowed = rod_cooldowns[name] or 0
+	if now < next_allowed then
+		return false
+	end
+	rod_cooldowns[name] = now + ROD_FIRE_COOLDOWN
+	return true
+end
+
+local function spawn_purification_orb(user, stack_table, ammo_def, ammo_name, rod_stats, homing_target)
+	if not user or not user:is_player() then
+		return
+	end
+	local pos = user:get_pos()
+	if not pos then
+		return
+	end
+	local dir = user:get_look_dir()
+	local spawn = vector.add(pos, vector.multiply(dir, 0.8))
+	spawn.y = spawn.y + 1.5
+	minetest.log("action", "[purif] spawn at "..minetest.pos_to_string(spawn).." dir "..minetest.serialize(dir))
+lun_sound("se_plst00", {pos = spawn, gain = 0.4, max_hear_distance = 32})
+	local obj = minetest.add_entity(spawn, "mcl_lun_items:purification_rod_projectile")
+	if obj then
+		local lua = obj:get_luaentity()
+		if lua and lua.initialize then
+			local stack
+			if stack_table then
+				stack = ItemStack(stack_table)
+			end
+			lua:initialize(user, stack, dir, ammo_def, ammo_name, rod_stats, homing_target)
+		end
+	end
+end
+
+if wielded_light and wielded_light.register_item_light then
+	-- Dummy item identifier used purely for wielded_light tracking
+	wielded_light.register_item_light("mcl_lun_items:purification_rod_orb_light", 12, false)
+	wielded_light.register_item_light("mcl_lun_items:yin_yang_orb_drop_light", 6, false)
+end
+
+register_schema_lighting()
+
+local orb_particle_textures = {
+	"touhou_particle_red_32x_1.png",
+	"touhou_particle_red_32x_2.png",
+	"touhou_particle_red_32x_3.png",
+	"touhou_particle_red_32x_4.png",
+	"touhou_particle_red_32x_5.png",
+	"touhou_particle_red_32x_6.png",
+	"touhou_particle_red_32x_7.png",
+	"touhou_particle_red_32x_8.png",
+}
+
+local function build_cone_limits(dir, magnitude, spread)
+	local base = vector.normalize(dir or {x = 0, y = 1, z = 0})
+	local mag = magnitude or 1
+	local sp = spread or 0.6
+	local minv = {
+		x = base.x * mag - sp,
+		y = base.y * mag - sp,
+		z = base.z * mag - sp,
+	}
+	local maxv = {
+		x = base.x * mag + sp,
+		y = base.y * mag + sp,
+		z = base.z * mag + sp,
+	}
+	local function ensure_upward(vec)
+		if vec.y < 0 then
+			vec.y = -vec.y
+		end
+		return vec
+	end
+	return ensure_upward(minv), ensure_upward(maxv)
+end
+
+local function apply_explosion_damage(pos, damage, reason, radius)
+	if not pos or not damage or damage <= 0 then
+		return
+	end
+	local effective_radius = radius or (DEFAULT_ROD_EXPLOSION_RADIUS + DEFAULT_ORB_EXPLOSION_RADIUS)
+	local search_radius = math.max(effective_radius, 0.1)
+	local targets = minetest.get_objects_inside_radius(pos, search_radius)
+	if not targets or #targets == 0 then
+		return
+	end
+	local final_reason = reason or {type = "projectile"}
+	for _, obj in ipairs(targets) do
+		if not obj then
+			goto continue
+		end
+		local lua = obj:get_luaentity()
+		if lua and lua.name == "__builtin:item" then
+			goto continue
+		end
+		if mcl_util and mcl_util.deal_damage then
+			mcl_util.deal_damage(obj, damage, final_reason)
+		elseif obj.punch then
+			obj:punch(final_reason.source or obj, 0.0, {
+				full_punch_interval = 1,
+				damage_groups = {fleshy = damage},
+			}, nil)
+		end
+		::continue::
+	end
+end
+
+local function spawn_particle_burst(config)
+	if not config or not config.center then
+		return
+	end
+	local normal = config.normal or {x = 0, y = 1, z = 0}
+	local height_offset = config.height_offset or config.height or 0.5
+	local center = vector.add(config.center, vector.multiply(normal, height_offset))
+	if config.sound and config.sound.name then
+		local sound_params = config.sound.params or {}
+		sound_params.object = config.sound.object
+		sound_params.pos = config.sound.pos or center
+		core.sound_play(config.sound.name, sound_params, true)
+	end
+	local minvel, maxvel
+	if config.cone then
+		minvel, maxvel = build_cone_limits(config.cone_dir or normal, config.cone_mag or 1, config.cone_spread or 0.4)
+	else
+		minvel = config.minvel or {x = -1, y = -1, z = -1}
+		maxvel = config.maxvel or {x = 1, y = 1, z = 1}
+	end
+	local textures = config.textures or orb_particle_textures
+	local amount = config.amount or 3
+	local return_ids = config.return_id
+	local ids
+	for _, tex in ipairs(textures) do
+		local texture = tex
+		if config.tint then
+			texture = texture .. "^[colorize:" .. config.tint .. ":180"
+		end
+		local id = core.add_particlespawner({
+			amount = amount,
+			time = config.time or 0.1,
+			minpos = center,
+			maxpos = center,
+			minvel = minvel,
+			maxvel = maxvel,
+			minsize = config.minsize or 1,
+			maxsize = config.maxsize or 2,
+			glow = config.glow or math.max(1, math.floor(8 * LIGHT_DIM_FACTOR)),
+			texture = texture,
+		})
+		if return_ids then
+			ids = ids or {}
+			table.insert(ids, id)
+		end
+	end
+	if config.light_entity then
+		minetest.add_entity(center, config.light_entity)
+	end
+	local damage = config.damage
+	if damage then
+		apply_explosion_damage(center, damage, config.reason, config.radius)
+	end
+	if return_ids then
+		return ids
+	end
+end
+
+local mcl_lun_items_mod = rawget(_G, "mcl_lun_items") or {}
+mcl_lun_items_mod.spawn_particle_burst = spawn_particle_burst
+mcl_lun_items_mod.build_lun_description = build_lun_description
+_G.mcl_lun_items = mcl_lun_items_mod
+
+local function apply_explosion_damage(pos, damage, reason, radius)
+	if not pos or not damage or damage <= 0 then
+		return
+	end
+	local effective_radius = radius or (DEFAULT_ROD_EXPLOSION_RADIUS + DEFAULT_ORB_EXPLOSION_RADIUS)
+	local search_radius = math.max(effective_radius, 0.1)
+	local targets = minetest.get_objects_inside_radius(pos, search_radius)
+	if not targets or #targets == 0 then
+		return
+	end
+	local final_reason = reason or {type = "projectile"}
+	for _, obj in ipairs(targets) do
+		if not obj then
+			goto continue
+		end
+		local lua = obj:get_luaentity()
+		if lua and lua.name == "__builtin:item" then
+			goto continue
+		end
+		if mcl_util and mcl_util.deal_damage then
+			mcl_util.deal_damage(obj, damage, final_reason)
+		elseif obj.punch then
+			obj:punch(final_reason.source or obj, 0.0, {
+				full_punch_interval = 1,
+				damage_groups = {fleshy = damage},
+			}, nil)
+		end
+		::continue::
+	end
+end
+
+local ORB_DROP_REFRESH = 0.25
+local orb_drop_timer = 0
+local function is_purification_rod(name)
+	return name and rod_index[name] ~= nil
+end
+
+local function ensure_purification_stack(stack)
+	if not stack or stack:is_empty() or not is_purification_rod(stack:get_name()) then
+		return stack
+	end
+	-- Disable prefix mutations for rods to keep descriptions stable.
+	local meta = stack:get_meta()
+	meta:set_string(ROD_META_KEY, "1")
+	if rod_descriptions[stack:get_name()] then
+		meta:set_string("description", rod_descriptions[stack:get_name()])
+	end
+	return stack
+end
+
+local function refresh_purification_stack(inv, listname, index)
+	if not inv or not listname or not index then
+		return
+	end
+	local stack = inv:get_stack(listname, index)
+	if stack:is_empty() or not is_purification_rod(stack:get_name()) then
+		return
+	end
+	local updated = ensure_purification_stack(stack)
+	inv:set_stack(listname, index, updated)
+end
+
+core.register_on_player_inventory_action(function(player, action, inventory, info)
+	if not inventory or type(info) ~= "table" then
+		return
+	end
+	local function handle(listname, index)
+		if listname and index then
+			refresh_purification_stack(inventory, listname, index)
+		end
+	end
+	if action == "move" then
+		handle(info.from_list, info.from_index)
+		handle(info.to_list, info.to_index)
+	elseif action == "put" or action == "take" then
+		handle(info.list, info.index)
+	end
+end)
+
+local function initialize_purification_inventory(player)
+	local inv = player and player:get_inventory()
+	if not inv then
+		return
+	end
+	for _, listname in ipairs({"main", "craft", "hand"}) do
+		local list = inv:get_list(listname)
+		if list then
+			for idx, stack in ipairs(list) do
+				if not stack:is_empty() and is_purification_rod(stack:get_name()) then
+					inv:set_stack(listname, idx, ensure_purification_stack(stack))
+				end
+			end
+		end
+	end
+end
+
+core.register_on_craft(function(itemstack)
+	if itemstack and not itemstack:is_empty() and is_purification_rod(itemstack:get_name()) then
+		itemstack = ensure_purification_stack(itemstack)
+	end
+	return itemstack
+end)
+
+if core.register_on_item_drop then
+	core.register_on_item_drop(function(player, itemstack, dropper)
+		if not itemstack or itemstack:is_empty() then
+			return itemstack
+		end
+		if is_purification_rod(itemstack:get_name()) then
+			itemstack = ensure_purification_stack(itemstack)
+		end
+		return itemstack
+	end)
+end
+
+core.register_on_joinplayer(function(player)
+	initialize_purification_inventory(player)
+end)
+
+local inv_refresh_timer = 0
+core.register_globalstep(function(dtime)
+	inv_refresh_timer = inv_refresh_timer + dtime
+	if inv_refresh_timer < 1 then
+		return
+	end
+	inv_refresh_timer = 0
+	for _, player in ipairs(core.get_connected_players()) do
+		initialize_purification_inventory(player)
+	end
+end)
+
+local function build_cone_limits(dir, magnitude, spread)
+	local base = vector.normalize(dir or {x = 0, y = 1, z = 0})
+	local mag = magnitude or 1
+	local sp = spread or 0.6
+	local minv = {
+		x = base.x * mag - sp,
+		y = base.y * mag - sp,
+		z = base.z * mag - sp,
+	}
+	local maxv = {
+		x = base.x * mag + sp,
+		y = base.y * mag + sp,
+		z = base.z * mag + sp,
+	}
+	local function ensure_upward(vec)
+		if vec.y < 0 then
+			vec.y = -vec.y
+		end
+		return vec
+	end
+	return ensure_upward(minv), ensure_upward(maxv)
+end
+
+local function play_snowball_effect(pos, color, damage, reason, radius, normal, cone, cone_dir)
+	if not pos then
+		return
+	end
+	local config = {
+		center = pos,
+		normal = normal,
+		height = 0.5,
+		textures = orb_particle_textures,
+		tint = color,
+		cone = cone,
+		cone_dir = cone_dir,
+		glow = 8,
+		amount = 3,
+		minsize = 1,
+		maxsize = 2,
+		sound = {
+			name = "se_kira00",
+			params = {gain = 0.9, max_hear_distance = 32},
+		},
+		light_entity = "mcl_lun_items:purification_rod_explosion_light",
+		damage = damage,
+		reason = reason,
+		radius = radius,
+	}
+	spawn_particle_burst(config)
+end
+
+local function spawn_bounce_particles(pos, color)
+	if not pos then
+		return
+	end
+	local config = {
+		center = pos,
+		textures = orb_particle_textures,
+		height = 0,
+		tint = color,
+		glow = 8,
+		amount = 1,
+		time = 0.08,
+		minsize = 0.5,
+		maxsize = 1.0,
+		minvel = {x = -0.1, y = 0.2, z = -0.1},
+		maxvel = {x = 0.1, y = 0.45, z = 0.1},
+		light_entity = "mcl_lun_items:purification_rod_bounce_light",
+	}
+	spawn_particle_burst(config)
+end
+
+-- mcl_particles textures found in the tree:
+-- games/lunatic/mods/ITEMS/mcl_totems/textures/mcl_particles_totem1.png
+-- games/lunatic/mods/ITEMS/mcl_totems/textures/mcl_particles_totem2.png
+-- games/lunatic/mods/ITEMS/mcl_totems/textures/mcl_particles_totem3.png
+-- games/lunatic/mods/ITEMS/mcl_totems/textures/mcl_particles_totem4.png
+-- games/lunatic/mods/ITEMS/mcl_portals/textures/mcl_particles_nether_portal.png
+-- games/lunatic/mods/ITEMS/mcl_portals/textures/mcl_particles_nether_portal_t.png
+-- games/lunatic/mods/ITEMS/mcl_bone_meal/textures/mcl_particles_bonemeal.png
+-- games/lunatic/mods/ITEMS/mcl_core/textures/mcl_particles_lava.png
+-- games/lunatic/mods/ITEMS/mcl_end/textures/mcl_particles_teleport.png
+-- games/lunatic/mods/ITEMS/mcl_sponges/textures/mcl_particles_sponge1.png
+-- games/lunatic/mods/ITEMS/mcl_sponges/textures/mcl_particles_sponge2.png
+-- games/lunatic/mods/ITEMS/mcl_sponges/textures/mcl_particles_sponge3.png
+-- games/lunatic/mods/ITEMS/mcl_sponges/textures/mcl_particles_sponge4.png
+-- games/lunatic/mods/ITEMS/mcl_sponges/textures/mcl_particles_sponge5.png
+-- games/lunatic/mods/ITEMS/REDSTONE/mcl_noteblock/textures/mcl_particles_note.png
+-- games/lunatic/mods/ITEMS/mcl_potions/textures/mcl_particles_droplet_bottle.png
+-- games/lunatic/mods/ITEMS/mcl_potions/textures/mcl_particles_effect.png
+-- games/lunatic/mods/ITEMS/mcl_potions/textures/mcl_particles_instant_effect.png
+-- games/lunatic/mods/ENVIRONMENT/mcl_weather/textures/mcl_particles_nether_dust1.png
+-- games/lunatic/mods/ENVIRONMENT/mcl_weather/textures/mcl_particles_nether_dust2.png
+-- games/lunatic/mods/ENVIRONMENT/mcl_weather/textures/mcl_particles_nether_dust3.png
+-- games/lunatic/mods/CORE/mcl_explosions/textures/mcl_particles_smoke.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_angry_villager.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_dragon_breath_1.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_dragon_breath_2.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_dragon_breath_3.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_fire_flame.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_smoke_anim.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_soul_fire_flame.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_squid_ink.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_squid_ink_1.png
+-- games/lunatic/mods/ENTITIES/mobs_mc/textures/mcl_particles_squid_ink_2.png
+-- games/lunatic/mods/ENTITIES/mcl_mobs/textures/mcl_particles_mob_death.png
+-- games/lunatic/mods/PLAYER/mcl_criticals/textures/mcl_particles_crit.png
+-- games/lunatic/mods/PLAYER/mcl_player/textures/mcl_particles_bubble.png
+-- games/lunatic/textures/server/FaithfulClone32x/mcl_particles_soul_fire_flame.png
+local HAUCHIWA_MAPLE_32 = {"hauchiwa_maple_32px.png"}
+local HAUCHIWA_MAPLE_16 = {"hauchiwa_maple_16px.png"}
+local HAUCHIWA_PARTICLE_TEXTURE = "mcl_particles_smoke_anim.png"
+local function damage_at_position(pos, damage, reason)
+	if not pos then return end
+	apply_explosion_damage(pos, damage, reason, 1.0)
+end
+
+local function random_maple_velocity()
+	return {
+		x = -0.2 + math.random() * 0.4,
+		y = 0.2 + math.random() * 0.4,
+		z = -0.2 + math.random() * 0.4,
+	}
+end
+
+local function spawn_maple_leaf_particles(pos, light_entity)
+	if not pos then
+		return
+	end
+	for _, offset in ipairs(MAPLE_PATTERN) do
+		local center = vector.add(pos, offset)
+		local count32 = math.random(1, 2)
+		local count16 = math.random(2, 3)
+		for i = 1, count32 do
+			spawn_particle_burst({
+				center = center,
+				textures = HAUCHIWA_MAPLE_32,
+				amount = 1,
+				time = 0.12,
+				minsize = 0.8,
+				maxsize = 1.2,
+				glow = 8,
+				minvel = random_maple_velocity(),
+				maxvel = {
+					x = 0.2 + math.random() * 0.2,
+					y = 0.8 + math.random() * 0.3,
+					z = 0.2 + math.random() * 0.2,
+				},
+				light_entity = light_entity,
+			})
+		end
+		for i = 1, count16 do
+			spawn_particle_burst({
+				center = center,
+				textures = HAUCHIWA_MAPLE_16,
+				amount = 1,
+				time = 0.12,
+				minsize = 0.4,
+				maxsize = 0.7,
+				glow = 8,
+				minvel = random_maple_velocity(),
+				maxvel = {
+					x = 0.4 + math.random() * 0.2,
+					y = 1.0 + math.random() * 0.3,
+					z = 0.4 + math.random() * 0.2,
+				},
+				light_entity = light_entity,
+			})
+		end
+	end
+end
+
+local function spawn_geyser_particles(pos, light_entity)
+	if not pos then
+		return
+	end
+	for _, offset in ipairs(MAPLE_PATTERN) do
+		local center = vector.add(pos, offset)
+		for i = 1, 2 do
+			spawn_particle_burst({
+				center = center,
+				textures = HAUCHIWA_MAPLE_32,
+				amount = 1,
+				time = 0.12,
+				minsize = 1.2,
+				maxsize = 1.8,
+				glow = 10,
+				minvel = random_maple_velocity(),
+				maxvel = {
+					x = 0.6 + math.random() * 0.3,
+					y = 1.2 + math.random() * 0.4,
+					z = 0.6 + math.random() * 0.3,
+				},
+				light_entity = light_entity,
+			})
+		end
+		for i = 1, 3 do
+			spawn_particle_burst({
+				center = center,
+				textures = HAUCHIWA_MAPLE_16,
+				amount = 1,
+				time = 0.12,
+				minsize = 0.6,
+				maxsize = 0.9,
+				glow = 10,
+				minvel = random_maple_velocity(),
+				maxvel = {
+					x = 0.5 + math.random() * 0.2,
+					y = 1.3 + math.random() * 0.4,
+					z = 0.5 + math.random() * 0.2,
+				},
+			})
+		end
+	end
+end
+
+local function is_player_grounded(player)
+	if not player then
+		return false
+	end
+	local pos = player:get_pos()
+	if not pos then
+		return false
+	end
+	local below = vector.floor(vector.subtract(pos, {x = 0, y = 0.2, z = 0}))
+	local node = core.get_node_or_nil(below)
+	if not node then
+		return false
+	end
+	local def = core.registered_nodes[node.name]
+	return def and def.walkable
+end
+
+local function is_walkable(pos)
+	local node = core.get_node_or_nil(pos)
+	if not node then
+		return false
+	end
+	local def = core.registered_nodes[node.name]
+	return def and def.walkable
+end
+
+local FanProjectilePrototype = {}
+FanProjectilePrototype.__index = FanProjectilePrototype
+
+function FanProjectilePrototype.new(entity)
+	return setmetatable({
+		object = entity,
+		lifetime = 0,
+		max_life = FAN_PROJECTILE_BASE_LIFE + math.random() * FAN_PROJECTILE_VAR_LIFE,
+		velocity = vector.zero(),
+		light_entity = "mcl_lun_items:purification_rod_explosion_light",
+		stats = get_fan_stats(nil),
+	}, FanProjectilePrototype)
+end
+
+function FanProjectilePrototype:initialize(user, dir, stats)
+	if not user or not self.object then
+		return
+	end
+	self.stats = stats or get_fan_stats(nil)
+	self.user = user
+	self.object:set_yaw(user:get_look_horizontal() or 0)
+	local forward = vector.normalize(dir)
+	if forward.x == 0 and forward.y == 0 and forward.z == 0 then
+		forward = {x = 0, y = 0, z = 1}
+	end
+	self.velocity = vector.multiply(forward, self.stats.initial_speed or FAN_PROJECTILE_INITIAL_SPEED)
+	self.object:set_velocity(self.velocity)
+	self.damage = self.stats.damage or FAN_PROJECTILE_DAMAGE
+	if wielded_light and wielded_light.track_item_entity then
+		wielded_light.track_item_entity(self.object, "fan_projectile_light", "mcl_lun_items:purification_rod_orb_light")
+	end
+	if self.object then
+		self.object:set_properties({
+			textures = {HAUCHIWA_PARTICLE_TEXTURE},
+			visual_size = {x = 0.6, y = 0.6},
+			glow = self.stats.glow or FAN_PARTICLE_GLOW,
+			light_source = self.stats.light or FAN_PROJECTILE_LIGHT,
+		})
+	end
+end
+
+function FanProjectilePrototype:get_reason()
+	return {
+		type = "projectile",
+		source = self.user,
+		direct = self.object,
+	}
+end
+
+function FanProjectilePrototype:explode(hitpos)
+	if not hitpos then
+		return
+	end
+	for _, offset in ipairs(MAPLE_PATTERN) do
+		local center = vector.add(hitpos, offset)
+		damage_at_position(center, self.damage, self:get_reason())
+	end
+	spawn_maple_leaf_particles(hitpos, self.light_entity)
+lun_sound("se_kira00", {pos = hitpos, gain = 0.5, max_hear_distance = 24})
+	if self.object then
+		self.object:remove()
+	end
+end
+
+local function vector_length(v)
+	return math.sqrt((v.x * v.x) + (v.y * v.y) + (v.z * v.z))
+end
+
+function FanProjectilePrototype:on_step(dtime)
+	if not self.object then
+		return
+	end
+	self.lifetime = self.lifetime + dtime
+	if self.lifetime >= self.max_life then
+		self:explode(self.object:get_pos())
+		return
+	end
+	local decay = self.stats.decay or FAN_PROJECTILE_DECAY
+	local gravity = self.stats.gravity or FAN_PROJECTILE_GRAVITY
+	local min_speed = self.stats.min_speed or FAN_PROJECTILE_MIN_SPEED
+	self.velocity = vector.multiply(self.velocity, math.max(0, 1 - decay * dtime))
+	self.velocity.y = self.velocity.y - gravity * dtime
+	local speed = vector_length(self.velocity)
+	if speed <= min_speed then
+		self:explode(self.object:get_pos())
+		return
+	end
+	local pos = self.object:get_pos()
+	if not pos then
+		return
+	end
+	local next_pos = vector.add(pos, vector.multiply(self.velocity, dtime))
+	for hit in core.raycast(pos, next_pos, true, true) do
+		if hit.type == "node" then
+			local under = hit.under
+			if under and is_walkable(under) then
+				self:explode(hit.intersection_point or hit.above or pos)
+				return
+			end
+		elseif hit.type == "object" and hit.ref ~= self.user then
+			mcl_util.deal_damage(hit.ref, self.damage, self:get_reason())
+			self:explode(hit.intersection_point or hit.ref:get_pos() or pos)
+			return
+		end
+	end
+	self.object:set_velocity(self.velocity)
+end
+
+	minetest.register_entity("mcl_lun_items:hauchiwa_fan_projectile", {
+		initial_properties = {
+			physical = false,
+			collide_with_objects = true,
+			collisionbox = {0, 0, 0, 0, 0, 0},
+			pointable = false,
+			visual = "sprite",
+			textures = {"mcl_particles_bonemeal.png^[colorize:" .. FAN_PARTICLE_COLOR .. ":160"},
+			visual_size = {x = 0.4, y = 0.4},
+			glow = FAN_PARTICLE_GLOW,
+			backface_culling = false,
+			light_source = FAN_PROJECTILE_LIGHT,
+			automatic_rotate = 0,
+		},
+	on_activate = function(self)
+		self.projectile = FanProjectilePrototype.new(self.object)
+	end,
+	on_step = function(self, dtime)
+		if self.projectile then
+			self.projectile:on_step(dtime)
+		end
+	end,
+})
+
+local GroundProjectilePrototype = {}
+GroundProjectilePrototype.__index = GroundProjectilePrototype
+
+function GroundProjectilePrototype.new(entity)
+	return setmetatable({
+		object = entity,
+		state = "falling",
+		damage = FAN_PROJECTILE_DAMAGE,
+		ground_dir = vector.zero(),
+		light_entity = "mcl_lun_items:purification_rod_explosion_light",
+		stats = get_fan_stats(nil),
+	}, GroundProjectilePrototype)
+end
+
+function GroundProjectilePrototype:initialize(user, dir, stats)
+	if not user or not self.object then
+		return
+	end
+	self.stats = stats or get_fan_stats(nil)
+	self.damage = self.stats.damage or FAN_PROJECTILE_DAMAGE
+	self.user = user
+	self.state = "falling"
+	local horizontal = vector.normalize(vector.new(dir.x, 0, dir.z))
+	if horizontal.x == 0 and horizontal.z == 0 then
+		horizontal = {x = 0, z = 1}
+	end
+	self.ground_dir = horizontal
+	self.object:set_velocity({x = 0, y = -(self.stats.initial_speed or FAN_PROJECTILE_INITIAL_SPEED) * 1.5, z = 0})
+end
+
+function GroundProjectilePrototype:get_reason()
+	return {
+		type = "projectile",
+		source = self.user,
+		direct = self.object,
+	}
+end
+
+function GroundProjectilePrototype:explode_ground(pos)
+	if not pos then
+		return
+	end
+	spawn_geyser_particles(pos, self.light_entity)
+	apply_explosion_damage(pos, self.damage, self:get_reason(), 1.2)
+	if self.object then
+		self.object:remove()
+	end
+end
+
+function GroundProjectilePrototype:on_step(dtime)
+	if not self.object then
+		return
+	end
+	local pos = self.object:get_pos()
+	if not pos then
+		return
+	end
+	if self.state == "falling" then
+		local below = vector.floor(vector.subtract(pos, {x = 0, y = 0.2, z = 0}))
+		if is_walkable(below) then
+			self.state = "rolling"
+			self.velocity = vector.multiply(self.ground_dir, (self.stats.initial_speed or FAN_PROJECTILE_INITIAL_SPEED) * 0.8)
+			self.velocity.y = 0
+			self.object:set_pos({x = pos.x, y = below.y + 0.2, z = pos.z})
+			self.object:set_velocity(self.velocity)
+			return
+		end
+		self.object:set_velocity({x = 0, y = -(self.stats.initial_speed or FAN_PROJECTILE_INITIAL_SPEED) * 1.5, z = 0})
+		return
+	end
+	self.velocity = vector.multiply(self.velocity, 0.7)
+	if self.velocity.y ~= 0 then
+		self.velocity.y = 0
+	end
+	local speed = vector_length(self.velocity)
+	if speed <= FAN_PROJECTILE_MIN_SPEED then
+		self:explode_ground(pos)
+		return
+	end
+	self.object:set_velocity(self.velocity)
+end
+
+minetest.register_entity("mcl_lun_items:hauchiwa_ground_projectile", {
+	initial_properties = {
+		physical = false,
+		collide_with_objects = false,
+		collisionbox = {0, 0, 0, 0, 0, 0},
+		pointable = false,
+		visual = "sprite",
+		textures = {"mcl_particles_smoke_anim.png"},
+		visual_size = {x = 0.6, y = 0.6},
+		glow = FAN_PARTICLE_GLOW,
+		light_source = FAN_PROJECTILE_LIGHT,
+		backface_culling = false,
+		automatic_rotate = 0,
+	},
+	on_activate = function(self)
+		self.projectile = GroundProjectilePrototype.new(self.object)
+	end,
+	on_step = function(self, dtime)
+		if self.projectile then
+			self.projectile:on_step(dtime)
+		end
+	end,
+})
+
+local fan_cooldowns = {}
+
+local function fan_ready(user, itemname)
+	if not user then return true end
+	local stats = get_fan_stats(itemname)
+	local cd = stats.cooldown or FAN_DEFAULT_COOLDOWN
+	local name = user:get_player_name()
+	if not name or name == "" then return true end
+	local now = core.get_gametime()
+	local next_allowed = fan_cooldowns[name] or 0
+	if now < next_allowed then
+		return false
+	end
+	fan_cooldowns[name] = now + cd
+	return true
+end
+
+local function spawn_hauchiwa_projectile(user, itemname)
+	if not user then
+		return
+	end
+	if not fan_ready(user, itemname) then
+		return
+	end
+	local stats = get_fan_stats(itemname)
+	local pos = user:get_pos()
+	if not pos then
+		return
+	end
+	local dir = user:get_look_dir()
+	local spawn = vector.add(pos, vector.new(dir.x, 0, dir.z))
+	spawn = vector.add(spawn, vector.new(0, 1.2, 0))
+	local obj = minetest.add_entity(spawn, "mcl_lun_items:hauchiwa_fan_projectile")
+	if not obj then
+		return
+	end
+	lun_sound("se_option", {
+		object = obj,
+		gain = 0.7,
+		max_hear_distance = 32,
+	})
+	lun_sound("se_plst00", {
+		object = obj,
+		gain = 0.6,
+		max_hear_distance = 32,
+	})
+	local lua = obj:get_luaentity()
+	if lua and lua.projectile and lua.projectile.initialize then
+		lua.projectile:initialize(user, dir, stats)
+		lua.projectile.light_entity = "mcl_lun_items:purification_rod_explosion_light"
+	end
+end
+_G.mcl_lun_items_launch_hauchiwa_projectile = spawn_hauchiwa_projectile
+
+local function spawn_ground_projectile(user, itemname)
+	if not user then
+		return
+	end
+	if not fan_ready(user, itemname) then
+		return
+	end
+	local stats = get_fan_stats(itemname)
+	local pos = user:get_pos()
+	if not pos then
+		return
+	end
+	local dir = user:get_look_dir()
+	local spawn = vector.add(pos, vector.multiply(dir, 0.5))
+	spawn.y = math.ceil(pos.y) + 1.5
+	local obj = minetest.add_entity(spawn, "mcl_lun_items:hauchiwa_ground_projectile")
+	if not obj then
+		return
+	end
+	local lua = obj:get_luaentity()
+	if lua and lua.projectile and lua.projectile.initialize then
+		lua.projectile:initialize(user, dir, stats)
+		lua.projectile.light_entity = "mcl_lun_items:purification_rod_explosion_light"
+	end
+end
+_G.mcl_lun_items_launch_hauchiwa_ground_projectile = spawn_ground_projectile
+_G.mcl_lun_items_is_grounded = is_player_grounded
+
+local function spawn_particles_at(pos, cfg, opts)
+	if not pos or not cfg then
+		return
+	end
+	local radius = (opts and opts.radius) or cfg.radius or 0.2
+	local texture = (opts and opts.texture) or cfg.texture or "mcl_particles_bonemeal.png"
+	if cfg.color then
+		texture = texture .. "^[colorize:" .. cfg.color .. ":180"
+	end
+	local height = (opts and opts.height) or cfg.height or 1
+	local amount = (opts and opts.amount) or math.floor(6 + height * 4)
+	core.add_particlespawner({
+		amount = amount,
+		time = 0.15,
+		minpos = {x = pos.x - radius, y = pos.y, z = pos.z - radius},
+		maxpos = {x = pos.x + radius, y = pos.y + height, z = pos.z + radius},
+		minvel = {x = 0, y = 0.5, z = 0},
+		maxvel = {x = 0, y = 0.9, z = 0},
+		minsize = 0.3,
+		maxsize = 0.5,
+		glow = cfg.glow or 6,
+		texture = texture,
+	})
+end
+
+local function spawn_orb_drop_particles(obj, cfg)
+	if not obj then
+		return
+	end
+	local pos = obj:get_pos()
+	if not pos then
+		return
+	end
+	local stack = obj:get_luaentity() and ItemStack(obj:get_luaentity().itemstring or "")
+	local stack_cfg = stack and particle_cfg_for_stack(stack)
+	local final_cfg = cfg or stack_cfg
+	if not final_cfg then
+		return
+	end
+    spawn_particles_at(pos, final_cfg)
+	if final_cfg.glow and obj.set_properties and obj:get_luaentity() then
+		obj:set_properties({glow = final_cfg.glow})
+	end
+end
+
+core.register_globalstep(function(dtime)
+	if orb_drop_timer < ORB_DROP_REFRESH then
+		orb_drop_timer = orb_drop_timer + dtime
+		return
+	end
+	orb_drop_timer = 0
+	local processed = {}
+	for _, player in ipairs(core.get_connected_players()) do
+		local ppos = player:get_pos()
+		if not ppos then
+			goto continue_player
+		end
+		for _, obj in ipairs(core.get_objects_inside_radius(ppos, 20)) do
+			if obj and not processed[obj] then
+				processed[obj] = true
+				local ent = obj:get_luaentity()
+				if ent and ent.name == "__builtin:item" then
+					local stack = ItemStack(ent.itemstring or "")
+					if not stack:is_empty() then
+						local cfg = particle_cfg_for_stack(stack)
+						if cfg and not ent._mcl_lun_items_orb_particles_spawned then
+							if wielded_light and wielded_light.track_item_entity and not ent._mcl_lun_items_orb_light then
+								wielded_light.track_item_entity(obj, "orb_drop", "mcl_lun_items:yin_yang_orb_drop_light")
+								ent._mcl_lun_items_orb_light = true
+							end
+							local is_lunar_bow = stack:get_name():find("^mcl_lun_bows:lunar_bow_") ~= nil
+							-- For lunar bows, keep spawning so the stream stays visible
+							if is_lunar_bow then
+								spawn_orb_drop_particles(obj, cfg)
+							else
+								spawn_orb_drop_particles(obj, cfg)
+								ent._mcl_lun_items_orb_particles_spawned = true
+							end
+						elseif cfg and stack:get_name():find("^mcl_lun_bows:lunar_bow_") then
+							-- Refresh effect each pass for lunar bow drops
+							spawn_orb_drop_particles(obj, cfg)
+						end
+					end
+				end
+			end
+		end
+	::continue_player::
+	end
+end)
+
+
+local wield_particle_timer = 0
+local function wield_particle_position(player)
+	local pos = player:get_pos()
+	if not pos then
+		return
+	end
+	local dir = player:get_look_dir()
+	local up = {x = 0, y = 1, z = 0}
+	local right = vector.cross(up, dir)
+	right = vector.normalize(right)
+	local forward = vector.multiply(dir, 0.4)
+	local right_offset = vector.multiply(right, 0.3)
+	local target = vector.add(pos, vector.add(forward, right_offset))
+	target.y = target.y + 0.8
+	return target
+end
+
+core.register_globalstep(function(dtime)
+	wield_particle_timer = wield_particle_timer + dtime
+	if wield_particle_timer < 0.25 then
+		return
+	end
+	wield_particle_timer = 0
+	for _, player in ipairs(core.get_connected_players()) do
+		local stack = player:get_wielded_item()
+		if stack and not stack:is_empty() then
+		local cfg = particle_cfg_for_stack(stack)
+		if cfg then
+			local pos = wield_particle_position(player)
+			if pos then
+				local height = cfg.height or 1
+					local wield_opts = {
+						radius = (cfg.radius or 0.2) * 0.4,
+						amount = math.floor(height),
+						height = height * 0.6,
+					}
+					spawn_particles_at(pos, cfg, wield_opts)
+				end
+			else
+			end
+		end
+	end
+end)
+
+local function purification_shoot(stack, user, pointed_thing)
+	if not user then
+		return stack
+	end
+	if not rod_ready(user) then
+		return stack
+	end
+	stack = ensure_purification_stack(stack)
+	local ammo, ammo_name = consume_orb_ammo(user)
+	if not ammo then
+		if user and user:get_player_name() then
+			minetest.chat_send_player(user:get_player_name(), S("No Yin-Yang orbs available."))
+		end
+		return stack
+	end
+	local homing_target
+	if ammo.type == "homing" then
+		if not mcl_lun_homing then
+			return stack
+		end
+		local range = ammo.homing_range or 35
+		local fov = ammo.homing_fov or 0.8
+		homing_target = mcl_lun_homing.find_best_target(user, range, fov)
+			if not homing_target then
+				lun_sound("se_ophide", {
+					pos = user:get_pos(),
+					gain = 0.6,
+					max_hear_distance = 24,
+				})
+				return stack
+			end
+		end
+		lun_sound("se_option", {
+			pos = user:get_pos(),
+			gain = 0.6,
+			max_hear_distance = 32,
+		})
+	local stack_table = stack and stack:to_table() or nil
+	local stats = stack_table and ITEM_STATS[stack_table.name]
+	spawn_purification_orb(user, stack_table, ammo, ammo_name, stats, homing_target)
+	minetest.after(0.15, function()
+		spawn_purification_orb(user, stack_table, ammo, ammo_name, stats, homing_target)
+	end)
+	minetest.after(0.30, function()
+		spawn_purification_orb(user, stack_table, ammo, ammo_name, stats, homing_target)
+	end)
+	if not core.is_creative_enabled(user:get_player_name()) then
+		stack:add_wear_by_uses(300)
+	end
+	return stack
+end
+
+local function annotate_explosion_desc(desc, radius, color)
+	if not radius or radius <= 0 then
+		return desc
+	end
+	local text = S("Explosion radius: @1", radius)
+	if color then
+		text = core.colorize(color, text)
+	end
+	return ("%s\n%s"):format(desc, text)
+end
+
+local function build_lun_description(def)
+	if not def then return "" end
+	local lines = {}
+	if def.description then
+		if def.color then
+			lines[#lines + 1] = core.colorize(def.color, def.description)
+		else
+			lines[#lines + 1] = def.description
+		end
+	end
+	if def.durability and def.durability > 0 then
+		lines[#lines + 1] = S("Durability: @1 uses", def.durability)
+	end
+	if def.damage then
+		lines[#lines + 1] = S("Damage: @1", def.damage)
+	end
+	if def.light_level then
+		lines[#lines + 1] = S("Luminance: @1", def.light_level)
+	end
+	if def.explosion_radius then
+		lines[#lines + 1] = S("Explosion radius: @1", def.explosion_radius)
+	end
+	return table.concat(lines, "\n")
+end
+
+local function register_mcl_lun_item(def)
+	if not def or not def.name then
+		return
+	end
+	local kind = def.kind or "tool"
+	local light_level = def.light_level or DEFAULT_LIGHT
+	register_item_light(def.name, light_level)
+	if kind == "tool" then
+		local desc = build_lun_description({
+			description = def.description or S("Purification Rod"),
+			color = def.color,
+			durability = def.durability or def.uses or ROD_DURABILITY,
+			explosion_radius = def.explosion_radius or DEFAULT_ROD_EXPLOSION_RADIUS,
+			damage = def.damage,
+			light_level = light_level,
+		})
+		local tool_caps = def.tool_capabilities or {
+			full_punch_interval = 1.0,
+				max_drop_level = 0,
+				groupcaps = {
+					swordy = {times = {[1]=1.6, [2]=1.6, [3]=1.6}, uses = 300, maxlevel = 1},
+					swordy_cobweb = {times = {[1]=0.5}, uses = 300, maxlevel = 1},
+					swordy_bamboo = {times = {[1]=0.3}, uses = 300, maxlevel = 1},
+				},
+				damage_groups = def.damage_groups or {fleshy = 6},
+			}
+		rod_descriptions[def.name] = desc
+		minetest.register_tool(def.name, {
+			description = desc,
+			mcl_lun_base_description = def.base_description or def.description or S("Purification Rod"),
+			_doc_items_longdesc = def.longdesc or S("A ceremonial wand."),
+			inventory_image = def.inventory_image or "gohei.png",
+			wield_image = def.wield_image or def.inventory_image or "gohei.png",
+			wield_scale = def.wield_scale or {x = 2, y = 2, z = 2},
+			stack_max = def.stack_max or 1,
+			light_source = light_level,
+			groups = def.groups or {tool = 1, weapon = 1, sword = 1, handy = 1, stick = 1, flammable = 1},
+			_mcl_toollike_wield = def.mcl_toollike_wield ~= false,
+			_mcl_uses = def.uses or def.durability or ROD_DURABILITY,
+			sound = def.sound or {breaks = "default_tool_breaks"},
+			tool_capabilities = tool_caps,
+			on_secondary_use = def.on_secondary_use,
+			on_place = def.on_place,
+			on_use = def.on_use,
+		})
+	else
+		local craft_desc = build_lun_description({
+			description = def.description or def.name,
+			color = def.color,
+			explosion_radius = def.explosion_radius or DEFAULT_ORB_EXPLOSION_RADIUS,
+			damage = def.damage,
+			light_level = light_level,
+		})
+		minetest.register_craftitem(def.name, {
+			description = craft_desc,
+			inventory_image = def.texture or def.inventory_image,
+			stack_max = def.stack_max or 16,
+			groups = def.groups or {misc = 1},
+			light_source = light_level,
+		})
+	end
+	ITEM_STATS[def.name] = {damage = def.damage, explosion_radius = def.explosion_radius}
+end
+
+for _, orb in ipairs(orb_variants) do
+	orb.kind = "craftitem"
+	orb.light_level = orb.light_level or DEFAULT_LIGHT
+	orb.explosion_radius = orb.explosion_radius or DEFAULT_ORB_EXPLOSION_RADIUS
+	
+	local ammo = ammo_definitions[orb.name]
+	if ammo then
+		local style_val = ammo.type or "Unknown"
+		-- Capitalize first letter
+		local style = style_val:gsub("^%l", string.upper)
+		
+		local damage_str = minetest.colorize("#FF6666", S("Damage: @1", ammo.damage))
+		local style_str = minetest.colorize("#D466FF", S("Style: @1", style))
+		
+		orb.description = orb.description .. "\n" .. damage_str .. "\n" .. style_str
+	end
+
+	register_mcl_lun_item(orb)
+end
+
+for _, variant in ipairs(rod_variants) do
+	variant.kind = "tool"
+	variant.durability = variant.durability or ROD_DURABILITY
+	variant.uses = variant.uses or ROD_DURABILITY
+	variant.light_level = variant.light_level or DEFAULT_LIGHT
+	variant.explosion_radius = variant.explosion_radius or DEFAULT_ROD_EXPLOSION_RADIUS
+		variant.inventory_image = variant.inventory_image or "gohei.png"
+		variant.wield_image = variant.wield_image or variant.inventory_image
+		variant.groups = variant.groups or {tool = 1, weapon = 1, sword = 1, handy = 1, stick = 1, flammable = 1}
+		variant.tool_capabilities = variant.tool_capabilities or {
+			full_punch_interval = 1.0,
+			max_drop_level = 0,
+			groupcaps = {
+				swordy = {times = {[1]=1.6, [2]=1.6, [3]=1.6}, uses = 300, maxlevel = 1},
+				swordy_cobweb = {times = {[1]=0.5}, uses = 300, maxlevel = 1},
+				swordy_bamboo = {times = {[1]=0.3}, uses = 300, maxlevel = 1},
+			},
+			damage_groups = variant.damage_groups or {fleshy = 6},
+		}
+		variant.on_use = purification_shoot
+		variant.on_secondary_use = cycle_ammo_type
+		variant.on_place = cycle_ammo_on_place
+		register_mcl_lun_item(variant)
+	end
+
+local purification_projectile = {
+	initial_properties = {
+		physical = false,
+		collide_with_objects = true,
+		collisionbox = {0, 0, 0, 0, 0, 0},
+		pointable = false,
+		visual = "mesh",
+		mesh = "mcl_lun_items_purification_orb.obj",
+		textures = {"yin_yang_orb.png"},
+		visual_size = {x = 4.0, y = 4.0},
+		glow = 8,
+		automatic_rotate = 0,
+		backface_culling = false,
+		pointlight = {
+			radius = 6,
+			intensity = 0.5,
+			color = "#eb9f9f",
+		},
+	},
+	velocity = {x = 0, y = 0, z = 0},
+	last_pos = nil,
+	lifetime = 0,
+	max_life = ROD_MAX_LIFE,
+	bounces_left = ROD_MAX_BOUNCES,
+	shooter = nil,
+	shooter_name = "",
+	ignore_until = 0,
+	damage = 2,
+	knockback = 0,
+	flame = false,
+	rotation_angle = 0,
+	base_pitch = 0,
+	base_yaw = 0,
+	last_node_hit = nil,
+	last_node_time = 0,
+	left_shooter = false,
+	homing_enabled = false,
+	homing_target = nil,
+	homing_range = 0,
+	homing_fov = 0,
+	homing_turn_rate = 0,
+	homing_size_factor = 1,
+	base_speed = ROD_SPEED,
+	homing_current_speed = 0,
+	homing_ramp = 0,
+	homing_has_target = false,
+}
+
+function purification_projectile:initialize(user, stack, dir, ammo_def, ammo_name, rod_stats, initial_target)
+	self.shooter = user
+	self.shooter_name = user:get_player_name() or ""
+	self.ignore_until = core.get_gametime() + 0.2
+	local base_velocity = vector.multiply(dir, ROD_SPEED)
+	self.base_speed = ROD_SPEED
+	self.homing_current_speed = self.base_speed
+	self.homing_ramp = 0
+	self.homing_has_target = false
+	if self.homing_enabled then
+		self.homing_current_speed = self.base_speed * HOMING_INITIAL_SPEED_FACTOR
+		self.velocity = vector.multiply(vector.normalize(base_velocity), self.homing_current_speed)
+	else
+		self.velocity = base_velocity
+	end
+	self.object:set_velocity(self.velocity)
+	self.object:set_yaw(user:get_look_horizontal() or 0)
+	self.last_pos = self.object:get_pos()
+	self.lifetime = 0
+	self.bounces_left = ROD_MAX_BOUNCES
+	self.max_life = ROD_MAX_LIFE
+	local rod_damage = (rod_stats and rod_stats.damage) or 0
+	local orb_damage = (ammo_def and ammo_def.damage) or 0
+	self.damage = rod_damage + orb_damage
+	local rod_radius = (rod_stats and rod_stats.explosion_radius) or DEFAULT_ROD_EXPLOSION_RADIUS
+	local orb_radius = (ammo_def and ammo_def.explosion_radius) or DEFAULT_ORB_EXPLOSION_RADIUS
+	self.rod_explosion_radius = rod_radius
+	self.orb_explosion_radius = orb_radius
+	self.explosion_radius = rod_radius + orb_radius
+	self.knockback = 0
+	self.flame = false
+	self.rotation_angle = 0
+	local dir = user:get_look_dir()
+	local horiz = math.sqrt(dir.x * dir.x + dir.z * dir.z)
+	local pitch = math.atan2(dir.y, horiz)
+	local yaw = math.atan2(dir.z, dir.x)
+	self.base_pitch = -pitch
+	self.base_yaw = yaw + math.pi / 2
+	self.object:set_rotation({x = self.base_pitch, y = self.base_yaw, z = 0})
+	self.left_shooter = false
+	self.ammo = ammo_def or ammo_definitions["mcl_lun_items:yin_yang_orb_precision"]
+	self.ammo_name = ammo_name
+	self.rotation_rate = ORB_ROTATION_SPEED * (self.ammo.rotation_multiplier or 1)
+	self.gravity_accel = self.ammo.gravity or 0
+	self.is_bouncing = self.ammo.type == "bouncing"
+	self.bounce_damping = self.ammo.bounce_damping or 1
+	self.particle_color = self.ammo.particle_color
+	self.homing_enabled = self.ammo.type == "homing" and mcl_lun_homing
+	if self.homing_enabled then
+		self.homing_range = self.ammo.homing_range or 30
+		self.homing_fov = self.ammo.homing_fov or 0.8
+		self.homing_turn_rate = self.ammo.homing_turn_rate or 4
+		self.homing_target = initial_target
+	end
+	local tex = self.ammo.model_texture or "yin_yang_orb.png"
+	if tex and self.object and self.object.set_properties then
+		self.object:set_properties({textures = {tex}})
+	end
+
+	if stack and mcl_enchanting and mcl_enchanting.get_enchantments then
+		local ench = mcl_enchanting.get_enchantments(stack)
+		if ench then
+			if ench.power then
+				self.damage = self.damage + (ench.power / 2) + 0.5
+			end
+			if ench.punch then
+				self.knockback = ench.punch
+			end
+			if ench.flame then
+				self.flame = true
+			end
+		end
+	end
+	if wielded_light and wielded_light.track_item_entity then
+		wielded_light.track_item_entity(self.object, "purification_orb", "mcl_lun_items:purification_rod_orb_light")
+	end
+end
+
+local function reflect_velocity(vel, normal)
+	normal = vector.normalize(normal)
+	local dot = vel.x * normal.x + vel.y * normal.y + vel.z * normal.z
+	return {
+		x = vel.x - 2 * dot * normal.x,
+		y = vel.y - 2 * dot * normal.y,
+		z = vel.z - 2 * dot * normal.z,
+	}
+end
+
+local function should_ignore(self, obj)
+	if not obj then
+		return true
+	end
+	if obj == self.shooter and (self.ignore_until >= core.get_gametime() or not self.left_shooter) then
+		minetest.log("action", "[purif] ignoring shooter (left="..tostring(self.left_shooter)..")")
+		return true
+	end
+	return false
+end
+
+function purification_projectile:get_reason()
+	return {
+		type = "yinyangorb",
+		source = self.shooter,
+		direct = self.object,
+	}
+end
+
+function purification_projectile:explode(pos, normal)
+	minetest.log("action", "[purif] explode at "..minetest.pos_to_string(pos or self.object:get_pos()))
+	local dir = vector.normalize(self.velocity or {x = 0, y = 1, z = 0})
+	play_snowball_effect(pos or self.object:get_pos(), self.particle_color, self.damage, self:get_reason(), self.explosion_radius, normal, true, dir)
+	self.object:remove()
+end
+
+function purification_projectile:close_range_detonation(pos)
+	if not pos then
+		return
+	end
+		core.sound_play(TNT_EXPLODE_SOUND, {pos = pos, gain = 1.0, max_hear_distance = 64}, true)
+	local prev_radius = self.explosion_radius
+	self.explosion_radius = HOMING_CLOSE_RADIUS
+	self:explode(pos)
+	self.explosion_radius = prev_radius
+end
+
+local function round_pos(pos)
+	if not pos then
+		return nil
+	end
+	return {
+		x = math.floor(pos.x + 0.5),
+		y = math.floor(pos.y + 0.5),
+		z = math.floor(pos.z + 0.5),
+	}
+end
+
+local function pos_equal(a, b)
+	if not a or not b then
+		return false
+	end
+	return a.x == b.x and a.y == b.y and a.z == b.z
+end
+
+function purification_projectile:bounce(normal, hitpos)
+	minetest.log("action", "[purif] bounce normal "..minetest.serialize(normal).." remaining "..self.bounces_left)
+	self.bounces_left = self.bounces_left - 1
+	self.velocity = reflect_velocity(self.velocity, normal or {x = 0, y = 1, z = 0})
+	if self.is_bouncing then
+		local damp = self.bounce_damping or 1
+		self.velocity = vector.multiply(self.velocity, damp)
+		local extra_y = self.ammo.extra_vertical or 0
+		if extra_y > 0 then
+			self.velocity.y = self.velocity.y + extra_y
+		end
+		local variation = 1 + (math.random() * 0.1 - 0.05)
+		self.velocity = vector.multiply(self.velocity, variation)
+	end
+	self.object:set_velocity(self.velocity)
+	if hitpos and normal then
+		self.object:set_pos(vector.add(hitpos, vector.multiply(normal, 0.05)))
+	elseif hitpos then
+		self.object:set_pos(hitpos)
+	end
+lun_sound("se_graze", {pos = hitpos or self.object:get_pos(), gain = 0.4, max_hear_distance = 32})
+	self.last_node_hit = round_pos(hitpos or self.object:get_pos())
+	self.last_node_time = core.get_gametime()
+	local particle_origin = vector.add((hitpos or self.object:get_pos()) or {x=0,y=0,z=0}, vector.multiply(normal or {x=0,y=1,z=0}, 0.15))
+	spawn_bounce_particles(particle_origin, self.particle_color)
+end
+
+local function axis_to_normal(axis)
+	if axis == "x+" then return {x = 1, y = 0, z = 0} end
+	if axis == "x-" then return {x = -1, y = 0, z = 0} end
+	if axis == "y+" then return {x = 0, y = 1, z = 0} end
+	if axis == "y-" then return {x = 0, y = -1, z = 0} end
+	if axis == "z+" then return {x = 0, y = 0, z = 1} end
+	if axis == "z-" then return {x = 0, y = 0, z = -1} end
+	return nil
+end
+
+local function entity_center(obj)
+	if not obj then
+		return nil
+	end
+	local pos = obj:get_pos()
+	if not pos then
+		return nil
+	end
+	local props = obj:get_properties()
+	if not props or not props.collisionbox then
+		return pos
+	end
+	local cb = props.collisionbox
+	if #cb < 6 then
+		return pos
+	end
+	local height = math.abs(cb[5] - cb[2])
+	local center_offset = {x = 0, y = height * 0.5, z = 0}
+	return vector.add(pos, center_offset)
+end
+
+function purification_projectile:hit_entity(obj, hitpos)
+	if not obj or should_ignore(self, obj) then
+		return
+	end
+	minetest.log("action", "[purif] hit entity "..(obj:get_luaentity() and obj:get_luaentity().name or "unknown").." pos "..minetest.pos_to_string(hitpos or obj:get_pos()))
+	local lua = obj:get_luaentity()
+	if lua and lua._hittable_by_projectile == false then
+		return
+	end
+	mcl_util.deal_damage(obj, self.damage, self:get_reason())
+	if self.knockback > 0 and obj.add_velocity then
+		obj:add_velocity(vector.multiply(vector.normalize(self.velocity), self.knockback * 2))
+	end
+	if self.flame and mcl_burning then
+		mcl_burning.set_on_fire(obj, 5)
+	end
+	local center_pos = entity_center(obj)
+	self:explode(center_pos or hitpos)
+end
+
+function purification_projectile:update_homing(dtime)
+	if not self.homing_enabled or not mcl_lun_homing or not self.object then
+		return
+	end
+	local target = self.homing_target
+	local valid = target and target.get_pos and target:get_pos()
+	if valid and target.get_hp then
+		local hp = target:get_hp()
+		if hp and hp <= 0 then
+			valid = nil
+		end
+	end
+	if not valid then
+		target = mcl_lun_homing.find_best_target(self.shooter, self.homing_range, self.homing_fov)
+		self.homing_target = target
+	end
+	if not target then
+		self.homing_has_target = false
+		self.homing_ramp = math.max(0, self.homing_ramp - dtime / HOMING_ACCEL_DURATION)
+		local speed_factor = HOMING_INITIAL_SPEED_FACTOR + (1 - HOMING_INITIAL_SPEED_FACTOR) * self.homing_ramp
+		local direction = vector.normalize(self.velocity)
+		self.homing_current_speed = self.base_speed * speed_factor
+		if vector.length(direction) > 0 then
+			self.velocity = vector.multiply(direction, self.homing_current_speed)
+		end
+		return
+	end
+	local target_pos = target:get_pos()
+	if not target_pos then
+		return
+	end
+
+	local current_pos = self.object:get_pos()
+	if current_pos and vector.distance(current_pos, target_pos) <= HOMING_CLOSE_DISTANCE then
+		self:close_range_detonation(current_pos)
+		return
+	end
+
+	local target_volume = 0
+	local props = target:get_properties()
+	local box = props and props.collisionbox
+	if box and #box >= 6 then
+		local w = math.max(0, box[4] - box[1])
+		local h = math.max(0, box[5] - box[2])
+		local d = math.max(0, box[6] - box[3])
+		target_volume = w * h * d
+	end
+	if target_volume > 0 then
+		local ratio = target_volume / ZOMBIE_COLLISION_VOLUME
+		self.homing_size_factor = math.min(math.max(ratio, 0.5), 2.0)
+	else
+		self.homing_size_factor = 1
+	end
+
+	self.homing_has_target = true
+	self.homing_ramp = math.min(1, self.homing_ramp + dtime / HOMING_ACCEL_DURATION)
+	local direction = vector.normalize(self.velocity)
+	local steer_vel = mcl_lun_homing.steer(self.velocity, self.object:get_pos(), target_pos, self.homing_turn_rate, dtime)
+	local new_dir = (steer_vel and vector.normalize(steer_vel)) or direction
+	if vector.length(new_dir) == 0 then
+		new_dir = direction
+	end
+	local speed_factor = (HOMING_INITIAL_SPEED_FACTOR + (1 - HOMING_INITIAL_SPEED_FACTOR) * self.homing_ramp) * (self.homing_size_factor or 1)
+	self.homing_current_speed = self.base_speed * speed_factor
+	self.velocity = vector.multiply(new_dir, self.homing_current_speed)
+end
+
+function purification_projectile:on_step(dtime)
+	local obj = self.object
+	if not obj then
+		return
+	end
+	local rate = self.rotation_rate or 0
+	self.rotation_angle = (self.rotation_angle + rate * dtime) % (math.pi * 2)
+	obj:set_rotation({x = self.base_pitch + self.rotation_angle, y = self.base_yaw, z = 0})
+	self.lifetime = self.lifetime + dtime
+	if self.lifetime >= self.max_life then
+		self:explode(obj:get_pos())
+		return
+	end
+	local pos = obj:get_pos()
+	if not pos then
+		self:explode(self.last_pos)
+		return
+	end
+	local last = self.last_pos or pos
+	local collided = false
+	local shooter_detected = false
+	if self.gravity_accel and self.gravity_accel ~= 0 then
+		self.velocity = vector.add(self.velocity, {x = 0, y = self.gravity_accel * dtime, z = 0})
+	end
+	self:update_homing(dtime)
+	local collided_pos = nil
+	for hit in core.raycast(last, pos, true, true) do
+		if hit.type == "object" then
+			if hit.ref == self.shooter then
+				shooter_detected = true
+			end
+			if hit.ref and hit.ref ~= obj and not should_ignore(self, hit.ref) then
+				self:hit_entity(hit.ref, hit.intersection_point or pos)
+				collided = true
+				break
+			end
+		elseif hit.type == "node" then
+			local under = hit.under
+			if under and is_walkable(under) then
+				minetest.log("action", "[purif] node hit at "..minetest.pos_to_string(under).." bounces_left="..self.bounces_left)
+				local node_pos = under
+				local rounded = round_pos(node_pos)
+				local now = core.get_gametime()
+				if rounded and self.last_node_hit and self.last_node_time and now - self.last_node_time < 0.08 and pos_equal(rounded, self.last_node_hit) then
+					goto continue_hit
+				end
+				local normal = hit.intersection_normal or axis_to_normal(hit.axis) or vector.normalize(vector.subtract(hit.above, under))
+				if self.bounces_left > 0 then
+					self:bounce(normal, hit.intersection_point or hit.above or pos)
+				else
+					self:explode(hit.intersection_point or hit.above or pos, normal)
+				end
+				collided = true
+				collided_pos = (self.object and self.object:get_pos()) or self.last_pos
+				break
+			end
+		end
+	::continue_hit::
+	end
+	if not shooter_detected then
+		if not self.left_shooter then
+			self.left_shooter = true
+			self.ignore_until = 0
+		end
+	end
+	if not collided then
+		obj:set_velocity(self.velocity)
+		self.last_pos = pos
+	else
+		self.last_pos = collided_pos or self.object:get_pos() or self.last_pos
+	end
+end
+
+minetest.register_entity("mcl_lun_items:purification_rod_projectile", purification_projectile)
+
+local explosion_light = {
+	initial_properties = {
+		physical = false,
+		pointable = false,
+		visual = "sprite",
+		textures = {"wieldhand.png"}, -- hidden via zero size
+		visual_size = {x = 0, y = 0},
+		light_source = 2,
+	},
+	timer = 0,
+	lifetime = 0.3,
+	start_light = 2,
+	end_light = 6,
+}
+
+function explosion_light:on_activate()
+	self.timer = 0
+	if wielded_light and wielded_light.track_item_entity then
+		wielded_light.track_item_entity(self.object, "purification_explosion", "mcl_lun_items:purification_rod_orb_light")
+	end
+end
+
+function explosion_light:on_step(dtime)
+	self.timer = self.timer + dtime
+	local life = self.lifetime or 0.3
+	local progress = math.min(1, self.timer / life)
+	local desired = math.floor(self.start_light + (self.end_light - self.start_light) * progress)
+	if desired < 1 then
+		desired = 1
+	end
+	if self.object then
+		self.object:set_properties({light_source = desired})
+	end
+	if self.timer >= (self.lifetime or 0.3) then
+		self.object:remove()
+	end
+end
+
+minetest.register_entity("mcl_lun_items:purification_rod_explosion_light", explosion_light)
+
+local gohei_projectile = table.copy(purification_projectile)
+gohei_projectile.initial_properties = table.copy(purification_projectile.initial_properties)
+gohei_projectile.initial_properties.textures = {"gohei.png"}
+gohei_projectile.initial_properties.pointlight = {
+    radius = 18,
+    intensity = 0.5,
+    color = "#eb9f9f",
+}
+
+function gohei_projectile:initialize(user, stack, dir, ammo_def, ammo_name, rod_stats, initial_target)
+    purification_projectile.initialize(self, user, stack, dir, ammo_def, ammo_name, rod_stats, initial_target)
+    self.light_entity = "mcl_lun_items:purification_rod_explosion_light"
+end
+
+minetest.register_entity("mcl_lun_items:gohei_projectile", gohei_projectile)
+
+local bounce_light = {
+	initial_properties = {
+		physical = false,
+		pointable = false,
+		visual = "sprite",
+		textures = {"wieldhand.png"},
+		visual_size = {x = 0, y = 0},
+	},
+	timer = 0,
+	lifetime = 0.15,
+}
+
+function bounce_light:on_activate()
+	self.timer = 0
+	if wielded_light and wielded_light.track_item_entity then
+		wielded_light.track_item_entity(self.object, "purification_bounce", "mcl_lun_items:purification_rod_orb_light")
+	end
+end
+
+function bounce_light:on_step(dtime)
+	self.timer = self.timer + dtime
+	if self.timer >= (self.lifetime or 0.15) then
+		self.object:remove()
+	end
+end
+
+minetest.register_entity("mcl_lun_items:purification_rod_bounce_light", bounce_light)

@@ -1,0 +1,7 @@
+mcl_lun_music_enabled (Enable ambient music controller) bool true
+mcl_lun_music_gain (Music gain/volume) float 0.6 0 2
+mcl_lun_music_min_silence (Minimum silence before music can start, seconds) int 180 0 86400
+mcl_lun_music_probability_per_second (Chance per second to start a track after silence+cooldown) float 0.002 0 1
+mcl_lun_music_cooldown_min (Cooldown after a track ends, seconds) int 240 0 86400
+mcl_lun_music_cooldown_max (Cooldown max after a track ends, seconds) int 600 0 86400
+mcl_lun_music_debug (Enable debug chatcommands) bool false
